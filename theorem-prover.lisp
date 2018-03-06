@@ -57,5 +57,8 @@ negation of an atom."
 
 (defun distribute-or (prop)
   "Distribute disjunction; e.g. (P v (Q ^ R))
-becomes (P v Q) ^ (P v R)."
-  ())
+becomes (P v Q) ^ (P v R). Assumes prop is a disjunction
+and at least one of the sub propositions is a conjunction."
+  (if (conjunction-p (prop1 prop))
+      `((,(prop1 (prop1 prop)) v ,(prop2 prop)) ^ (,(prop2 (prop1 prop)) v ,(prop2 prop)))
+      `((,(prop1 (prop2 prop)) v ,(prop1 prop)) ^ (,(prop2 (prop2 prop)) v ,(prop1 prop)))))

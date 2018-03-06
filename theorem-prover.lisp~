@@ -1,1 +1,96 @@
+;;; Variables used in resolution
+(defvar *clauses* ())
+(defvar *clause-pairs* ())
+(defvar *tried-clause-pairs* ())
+
+;;; Logical symbols
 (defconstant -> '->)
+(defconstant <-> '<->)
+(defconstant v 'v)
+(defconstant ^ '^)
+(defconstant ~ '~)
+
+;;; Predicates
+(defun atom-p (prop)
+  "Return true if prop is an atom."
+  (and (not (symbol-p prop)) (not (listp prop))))
+
+(defun symbol-p (prop) 
+  "Return true if prop is one of the defined logical symbol."
+  (or (eq prop ->) 
+      (eq prop <->) 
+      (eq prop ~)
+      (eq prop v)
+      (eq prop ^)))
+
+(defun literal-p (prop)
+  "Return true if an atom is an atom or the
+negation of an atom."
+  (or (atom-p prop) (and (negation-p prop) 
+			 (atom-p (second prop)))))
+
+(defun conjunction-p (prop)
+  "Retrun true if the proposition is a conjunction."
+  (and (listp prop) (eq ^ (second prop))))
+
+(defun disjunction-p (prop)
+  "Retrun true if the proposition is a conjunction."
+  (and (listp prop) (eq v (second prop))))
+
+(defun negation-p (prop)
+  "Return true if prop is a negation."
+  (and (listp prop) (eq (first prop) ~)))
+
+;;;Selectors
+(defun connector (prop)
+  (second prop))
+
+(defun prop1 (prop)
+  (first prop))
+
+(defun prop2 (prop)
+  (third prop))
+
+(defun negation-sign (prop)
+  (first prop))
+
+(defun negation-operand (prop)
+  (second prop))
+
+;;;Functions for putting into CNF
+(defun bring-in-negation (prop &optional (has-odd-negs nil))
+  "Simplify a negation by eliminating extra negations signs
+and applying DeMorgan's law to conjunctions and disjunctions."
+  (flet ((negation-p (p)
+	   ((or (eq (negation-operand prop) ~) 
+		(negation-p (negation-operand prop))))))
+    (cond (has-odd-negs (if (negation-p prop)
+			  ) )
+	((disjunction-p (negation-operand prop))
+	 `((~ ,(prop1 prop)) ^ (~ ,(prop2 prop))))
+	((conunction-p (negation-operand prop))
+	 `((~ ,(prop1 prop)) v (~ ,(prop2 prop)))))))
+
+(defun distribute-or (prop)
+  "Distribute disjunction; e.g. (P v (Q ^ R))
+becomes (P v Q) ^ (P v R). Assumes prop is a disjunction
+and at least one of the sub propositions is a conjunction."
+  (let ((prop1 (prop1 prop))
+	(prop2 (prop2 prop)))
+    (if (conjunction-p prop1)
+	`((,(prop1 prop1) v ,prop2) ^ (,(prop2 prop1) v ,prop2))
+	`((,(prop1 prop2) v ,prop1) ^ (,(prop2 prop2) v ,prop1)))))
+
+(defun expand-implication (prop)
+  "Convert proposition of the form P -> Q to
+~P v Q. Assumes prop is a implication."
+  (let ((prop1 (prop1 prop))
+	(prop2 (prop2 prop)))
+      `((~ ,prop1) v ,prop2)))
+
+(defun expand-biconditional (prop)
+  "Convert proposition of the form P <-> Q
+to ((~ P) v Q) ^ ((~ Q) v P). Assumes prop is a biconditional."
+  (let ((prop1 (prop1 prop))
+	(prop2 (prop2 prop)))
+    `(((~ ,prop1) v ,prop2) ^ ((~ ,prop2) v ,prop1))))

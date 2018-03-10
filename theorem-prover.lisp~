@@ -58,39 +58,52 @@ negation of an atom."
   (second prop))
 
 ;;;Functions for putting into CNF
-(defun bring-in-negation (prop &optional (has-odd-negs nil))
+(defun bring-in-negation (prop &optional (has-even-negs nil))
   "Simplify a negation by eliminating extra negations signs
 and applying DeMorgan's law to conjunctions and disjunctions."
-  (flet ((negation-p (p)
-	   ((or (eq (negation-operand prop) ~) 
-		(negation-p (negation-operand prop))))))
-    (cond (has-odd-negs (if (negation-p prop)
-			  ) )
-	((disjunction-p (negation-operand prop))
-	 `((~ ,(prop1 prop)) ^ (~ ,(prop2 prop))))
-	((conunction-p (negation-operand prop))
-	 `((~ ,(prop1 prop)) v (~ ,(prop2 prop)))))))
+  (flet ((double-negation-p (p)
+	   (eq (negation-operand p) ~)))
+    (let ((operand (negation-operand prop)))
+      (cond ((disjunction-p operand)                   ;prop is a disjunction
+	     `(,(negate (prop1 operand)) ^ ,(negate (prop2 operand))))
+	    ((conjunction-p operand)                   ;prop is a conjunction
+	    `(,(negate (prop1 operand)) v ,(negate (prop2 operand))))
+	    (has-even-negs (if (double-negation-p prop)                ;prop is negation with even # of negation symbols
+			       (bring-in-negation (rest prop) nil)
+			       operand))
+	    (t (if (double-negation-p prop)                            ;prop is a negation with an odd # of negation symbols
+		   (bring-in-negation (rest prop) t)
+		 (negate operand)))))))
 
 (defun distribute-or (prop)
   "Distribute disjunction; e.g. (P v (Q ^ R))
 becomes (P v Q) ^ (P v R). Assumes prop is a disjunction
 and at least one of the sub propositions is a conjunction."
-  (let ((prop1 (prop1 prop))
-	(prop2 (prop2 prop)))
-    (if (conjunction-p prop1)
-	`((,(prop1 prop1) v ,prop2) ^ (,(prop2 prop1) v ,prop2))
-	`((,(prop1 prop2) v ,prop1) ^ (,(prop2 prop2) v ,prop1)))))
+  (with-props (prop p1 p2)
+    (if (conjunction-p p1)
+	`((,(prop1 p1) v ,p2) ^ (,(prop2 p1) v ,p2))
+	`((,(prop1 p2) v ,p1) ^ (,(prop2 p2) v ,p1)))))
 
 (defun expand-implication (prop)
   "Convert proposition of the form P -> Q to
 ~P v Q. Assumes prop is a implication."
-  (let ((prop1 (prop1 prop))
-	(prop2 (prop2 prop)))
-      `((~ ,prop1) v ,prop2)))
+  (with-props (prop p1 p2) 
+    `(,(negate p1) v ,p2)))
 
 (defun expand-biconditional (prop)
   "Convert proposition of the form P <-> Q
 to ((~ P) v Q) ^ ((~ Q) v P). Assumes prop is a biconditional."
-  (let ((prop1 (prop1 prop))
-	(prop2 (prop2 prop)))
-    `(((~ ,prop1) v ,prop2) ^ ((~ ,prop2) v ,prop1))))
+  (with-props (prop p1 p2)
+    `((,(negate p1) v ,p2) ^ (,(negate p2) v ,p1))))
+
+(defun negate (prop)
+  "Negate a proposition."
+  (if (negation-p prop)
+      (cons ~ prop)
+      `(~ ,prop)))
+
+;;;UTILITY
+(defmacro with-props ((prop prop1 prop2) &body body)
+  `(let* ((,prop1 (prop1 ,prop))
+	  (,prop2 (prop2 ,prop)))
+     ,@body))

@@ -27,19 +27,41 @@
   "Return true if an atom is an atom or the
 negation of an atom."
   (or (atom-p prop) (and (negation-p prop) 
-			 (atom-p (second prop)))))
+			 (atom-p (negation-operand prop)))))
 
 (defun conjunction-p (prop)
   "Retrun true if the proposition is a conjunction."
-  (and (listp prop) (eq ^ (second prop))))
+  (and (listp prop) (eq ^ (connector prop))))
 
 (defun disjunction-p (prop)
   "Retrun true if the proposition is a conjunction."
-  (and (listp prop) (eq v (second prop))))
+  (and (listp prop) (eq v (connector prop))))
 
 (defun negation-p (prop)
   "Return true if prop is a negation."
-  (and (listp prop) (eq (first prop) ~)))
+  (and (listp prop) (eq (negation-sign prop) ~)))
+
+(defun implication-p (prop)
+  "Return true if prop is an implication."
+  (and (listp prop) (eq (connector prop) ->)))
+
+(defun biconditional-p (prop)
+  "Return true if prop is a biconditional."
+  (and (listp prop) (eq (connector prop) <->)))
+
+(defun literal-disj-p (prop)
+  "Return true if prop is a disjunction of literals."
+  (and (listp prop) 
+       (eq (connector prop) v) 
+       (literal-p (prop1 prop))
+       (literal-p (prop2 prop))))
+
+(defun literal-conj-p (prop)
+  "Return true if prop is a conjunction of literals."
+  (and (listp prop) 
+       (eq (connector prop) ^) 
+       (literal-p (prop1 prop))
+       (literal-p (prop2 prop))))
 
 ;;;Selectors
 (defun connector (prop)
@@ -58,22 +80,25 @@ negation of an atom."
   (second prop))
 
 ;;;Functions for putting into CNF
-(defun bring-in-negation (prop &optional (has-even-negs nil))
+(defun bring-in-negation (prop &optional (has-even-negs nil negs-supplied-p))
   "Simplify a negation by eliminating extra negations signs
 and applying DeMorgan's law to conjunctions and disjunctions."
   (flet ((double-negation-p (p)
-	   (eq (negation-operand p) ~)))
+	   (eq (negation-operand p) ~))
+	 (double-neg-bring-in (p else &optional (even-negs nil))
+	   `(if (double-negation-p ,p)
+		(bring-in-negation (rest ,p) ,even-negs)
+		,else)))
     (let ((operand (negation-operand prop)))
-      (cond ((disjunction-p operand)                   ;prop is a disjunction
-	     `(,(negate (prop1 operand)) ^ ,(negate (prop2 operand))))
-	    ((conjunction-p operand)                   ;prop is a conjunction
-	    `(,(negate (prop1 operand)) v ,(negate (prop2 operand))))
-	    (has-even-negs (if (double-negation-p prop)                ;prop is negation with even # of negation symbols
-			       (bring-in-negation (rest prop) nil)
-			       operand))
-	    (t (if (double-negation-p prop)                            ;prop is a negation with an odd # of negation symbols
-		   (bring-in-negation (rest prop) t)
-		 (negate operand)))))))
+      (cond 
+	(negs-supplied-p (if has-even-negs 
+			     (double-neg-bring-in prop operand nil)              ;prop is negation with even # of negation symbols
+			     (double-neg-bring-in  prop (negate operand) t)))                      ;prop is a negation with an odd # of negation symbols		 
+	((disjunction-p operand)                   ;prop is a disjunction
+	 `(,(negate (prop1 operand)) ^ ,(negate (prop2 operand))))
+	((conjunction-p operand)                   ;prop is a conjunction
+	 `(,(negate (prop1 operand)) v ,(negate (prop2 operand))))
+	(t (double-neg-bring-in prop (negate operand) t))))))
 
 (defun distribute-or (prop)
   "Distribute disjunction; e.g. (P v (Q ^ R))
@@ -102,8 +127,19 @@ to ((~ P) v Q) ^ ((~ Q) v P). Assumes prop is a biconditional."
       (cons ~ prop)
       `(~ ,prop)))
 
+(defun cnf (prop)
+  "Put proposition in CNF if not already."
+  (cond ((literal-p prop) prop)
+	((negation-p prop) (cnf (bring-in-negation prop)))
+	((implication-p prop) (cnf (expand-implication prop)))
+	((biconditional-p prop) (cnf (expand-biconditional prop)))
+	((conjunction-p prop) )))
+
 ;;;UTILITY
 (defmacro with-props ((prop prop1 prop2) &body body)
   `(let* ((,prop1 (prop1 ,prop))
 	  (,prop2 (prop2 ,prop)))
      ,@body))
+(P v (Q v (R ^ S)))
+(P v ((Q v R) ^ (Q v S)))
+((P v (Q v R)) ^ (P v (Q v S)))

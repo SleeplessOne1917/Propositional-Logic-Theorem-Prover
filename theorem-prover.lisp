@@ -79,6 +79,11 @@ negation of an atom."
   (second prop))
 
 ;;;Functions for putting into CNF
+(defmacro with-props ((prop prop1 prop2) &body body)
+  `(let ((,prop1 (prop1 ,prop))
+	  (,prop2 (prop2 ,prop)))
+     ,@body))
+
 (defun bring-in-negation (prop &optional (has-even-negs nil negs-supplied-p))
   "Simplify a negation by eliminating extra negations signs
 and applying DeMorgan's law to conjunctions and disjunctions."
@@ -169,11 +174,33 @@ during conversion to CNF in addition to those specified in conds."
 					   (t (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
 	(t (error "Incorrect input"))))
 
-;;;UTILITY
-(defmacro with-props ((prop prop1 prop2) &body body)
-  `(let ((,prop1 (prop1 ,prop))
-	  (,prop2 (prop2 ,prop)))
-     ,@body))
-;(P v (Q v (R ^ S)))
-;(P v ((Q v R) ^ (Q v S)))
-;((P v (Q v R)) ^ (P v (Q v S)))
+;;;RESOLUTION
+(defun make-set (L)
+  "Turn L into a set by removing duplicate elements.
+Removal is shallow."
+  (cond ((literal-p L) (list L))
+    ((endp L) nil)
+    ((find (first L) (rest L)) (make-set (rest L)))
+    (t (cons (first L) (make-set (rest L))))))
+
+(defun clear ()
+  "Clear clauses, clause pairs, and tried clause pairs."
+  (setf *clauses* ())
+  (setf *clause-pairs* ())
+  (setf *tried-clause-pairs* ()))
+
+(defun disj-to-set (P)
+  "Convert a P into a set of its literals without connectors.
+Assumes P is a disjunction of literals or other disjunctions."
+  (if (disj-p P)
+      (union (disj-to-set (prop1 P)) (disj-to-set (prop2 P)))
+      (make-set P)))
+
+(defun add-to-clauses (prop)
+  "Takes PROP (assumed to be in CNF), convert each conjunct into
+a set of literals, and add each of those sets to *CLAUSES* if not
+already present."
+  (cond ((conj-p prop) (add-to-clauses (prop1 prop))
+	 (add-to-clauses (prop2 prop)))
+	((disj-p prop) (pushnew (disj-to-set prop) *clauses*))
+	(t (pushnew (make-set prop) *clauses*))))

@@ -205,15 +205,16 @@ already present."
 	((disj-p prop) (pushnew (disj-to-set prop) *clauses*))
 	(t (pushnew (make-set prop) *clauses*))))
 
-;;;DO NOT USE RECURSION FOR RESOLVE
+;;;RESOLUTION
 (defun resolve (C1 C2)
   "Apply resolution algorithm to clauses C1 and C2. C1 and C2
 are expected to be sets of literals. Returns resulting clause, or
 nil if resolution can't be applied. If an empty clause is produced,
 'empty is returned."
-  (dolist (literal C1 nil)
+  (dolist (literal C1 (values nil nil))
     (if (member (bring-in-negation (negate literal)) C2 :test #'equal)
 	(if (and (= (length C1) 1) (= (length C2) 1))
-	    (return 'empty)
-	    (return (union (remove literal C1 :test #'equal) 
-			   (remove (bring-in-negation (negate literal)) C2 :test #'equal)))))))
+	    (return (values nil t))
+	    (return (values (union (remove literal C1 :test #'equal) 
+				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
+			    t))))))

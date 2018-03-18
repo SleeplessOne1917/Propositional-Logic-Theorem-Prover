@@ -1,7 +1,6 @@
 ;;; Variables used in resolution
 (defvar *clauses* ())
-(defvar *clause-pairs* ())
-(defvar *tried-clause-pairs* ())
+(defvar *clause-pairs* (make-hash-table))
 
 ;;; Logical symbols
 (defconstant -> '->)
@@ -183,11 +182,14 @@ Removal is shallow."
     ((find (first L) (rest L)) (make-set (rest L)))
     (t (cons (first L) (make-set (rest L))))))
 
+(defun set-equal (S1 S2) 
+  "Checks to see if sets S1 and S2 are equal."
+  (not (set-difference S1 S2)))
+
 (defun clear ()
   "Clear clauses, clause pairs, and tried clause pairs."
   (setf *clauses* ())
-  (setf *clause-pairs* ())
-  (setf *tried-clause-pairs* ()))
+  (setf *clause-pairs* (make-hash-table)))
 
 (defun disj-to-set (P)
   "Convert a P into a set of its literals without connectors.
@@ -208,9 +210,9 @@ already present."
 ;;;RESOLUTION
 (defun resolve (C1 C2)
   "Apply resolution algorithm to clauses C1 and C2. C1 and C2
-are expected to be sets of literals. Returns resulting clause, or
-nil if resolution can't be applied. If an empty clause is produced,
-'empty is returned."
+are expected to be sets of literals. Returns multiple values. First value
+is the new clause, if one can be made. The second value returns t if the clauses resolve
+or nil otherwise."
   (dolist (literal C1 (values nil nil))
     (if (member (bring-in-negation (negate literal)) C2 :test #'equal)
 	(if (and (= (length C1) 1) (= (length C2) 1))
@@ -218,3 +220,18 @@ nil if resolution can't be applied. If an empty clause is produced,
 	    (return (values (union (remove literal C1 :test #'equal) 
 				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
 			    t))))))
+
+(defun make-pairs-with-clause (clause)
+  "Make every combination of CLAUSE and each member of clauses
+and add them to *CLAUSE-PAIRS* if not already present."
+  (dolist (cl *clauses*)
+    (multiple-value-bind (tried set) (gethash (make-set (list clause cl)) *clause-pairs*)
+      (if (not (or set (equal clause cl)))
+	  (setf (gethash (make-set (list clause cl)) *clause-pairs*) nil)
+	  tried))))
+
+(defun make-clause-pairs ()
+  "Make all combinations of two clauses from CLAUSES and and put them
+in clause pairs."
+  (dolist (clause *clauses*)
+    (make-pairs-with-clause clause)))

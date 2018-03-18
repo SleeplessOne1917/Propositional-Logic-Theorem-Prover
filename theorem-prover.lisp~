@@ -1,7 +1,6 @@
 ;;; Variables used in resolution
 (defvar *clauses* ())
-(defvar *clause-pairs* ())
-(defvar *tried-clause-pairs* ())
+(defvar *clause-pairs* (make-hash-table))
 
 ;;; Logical symbols
 (defconstant -> '->)
@@ -183,6 +182,10 @@ Removal is shallow."
     ((find (first L) (rest L)) (make-set (rest L)))
     (t (cons (first L) (make-set (rest L))))))
 
+(defun set-equal (S1 S2) 
+  "Checks to see if sets S1 and S2 are equal."
+  (not (set-difference S1 S2)))
+
 (defun clear ()
   "Clear clauses, clause pairs, and tried clause pairs."
   (setf *clauses* ())
@@ -205,15 +208,19 @@ already present."
 	((disj-p prop) (pushnew (disj-to-set prop) *clauses*))
 	(t (pushnew (make-set prop) *clauses*))))
 
-;;;DO NOT USE RECURSION FOR RESOLVE
+;;;RESOLUTION
 (defun resolve (C1 C2)
   "Apply resolution algorithm to clauses C1 and C2. C1 and C2
 are expected to be sets of literals. Returns resulting clause, or
 nil if resolution can't be applied. If an empty clause is produced,
 'empty is returned."
-  (dolist (literal C1 nil)
+  (dolist (literal C1 (values nil nil))
     (if (member (bring-in-negation (negate literal)) C2 :test #'equal)
 	(if (and (= (length C1) 1) (= (length C2) 1))
-	    (return 'empty)
-	    (return (union (remove literal C1 :test #'equal) 
-			   (remove (bring-in-negation (negate literal)) C2 :test #'equal)))))))
+	    (return (values nil t))
+	    (return (values (union (remove literal C1 :test #'equal) 
+				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
+			    t))))))
+
+(defun add-clause-pairs (clause clauses)
+  )

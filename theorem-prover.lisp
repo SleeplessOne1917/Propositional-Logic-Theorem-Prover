@@ -54,12 +54,19 @@ negation of an atom."
        (literal-p (prop1 prop))
        (literal-p (prop2 prop))))
 
-(defun sub-literal-disj-p (prop)
-  "Return true if a disjunction is made of a disjunction of literals."
-  (and (or (literal-p (prop1 prop)) 
-       (and (disj-p (prop1 prop)) (literal-parts-p (prop1 prop))))
-      (or (literal-p (prop2 prop))
-       (and (disj-p (prop2 prop)) (literal-parts-p (prop2 prop))))))
+(defun literal-disj-p (prop)
+  "Return true if PROP is a disjunction made of literals or disjunctions of literals."
+  (labels ((disj-or-lit-p (p)
+	     (cond ((literal-p p) t)
+		   ((made-of-disj-or-lit-p p)
+		    (and (disj-or-lit-p (prop1 p)) (disj-or-lit-p (prop2 p))))
+		   (t nil)))
+	   (made-of-disj-or-lit-p (p)
+	     (and (or (literal-p (prop1 p)) (disj-p (prop1 p)))
+		  (or (literal-p (prop2 p)) (disj-p (prop2 p))))))
+    (if (disj-p prop)
+	(disj-or-lit-p prop)
+	nil)))
 
 ;;;Selectors
 (defun connector (prop)
@@ -151,26 +158,26 @@ Assumes at least one of the component propositions is an implication."
 (defmacro cnf-cond-conj-disj (prop &rest conds)
   "Cover conditions common to converting conjunctions or disjunctions
 during conversion to CNF in addition to those specified in conds."
-  `(cond ((literal-parts-p ,prop) ,prop)
+  `(cond ((literal-parts-p ,prop) (format t "~A~%" ,prop) ,prop)
 	 ((or (bicond-p (prop1 ,prop)) (bicond-p (prop2 ,prop))) 
-	  (cnf (expand-sub-bicond ,prop)))
+	  (format t "~A~%" ,prop) (cnf (expand-sub-bicond ,prop)))
 	 ((or (impl-p (prop1 ,prop)) (impl-p (prop2 ,prop)))
-	  (cnf (expand-sub-impl ,prop)))
+	  (format t "~A~%" prop) (cnf (expand-sub-impl ,prop)))
 	 ,@conds))
 
 (defun cnf (prop)
   "Put proposition in CNF if not already."
-  (cond ((literal-p prop) prop)
-	((neg-p prop) (cnf (bring-in-negation prop)))
+  (cond ((literal-p prop) (format t "~A~%" prop) prop)
+	((neg-p prop) (format t "~A~%" prop) (cnf (bring-in-negation prop)))
 	((impl-p prop) (cnf (expand-impl prop)))
-	((bicond-p prop) (cnf (expand-bicond prop)))
+	((bicond-p prop) (format t "~A~%" prop) (cnf (expand-bicond prop)))
 	((conj-p prop) (cnf-cond-conj-disj prop 
-					   (t (list (cnf (prop1 prop)) ^ (cnf (prop2 prop))))))
+					   (t (format t "~A~%" prop) (list (cnf (prop1 prop)) ^ (cnf (prop2 prop))))))
 	((disj-p prop) (cnf-cond-conj-disj prop
 					  ((or (conj-p (prop1 prop)) (conj-p (prop2 prop)))
-					    (cnf (distr-disj prop)))
-					  ((sub-literal-disj-p prop) prop)
-					   (t (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
+					    (format t "~A~%" prop) (cnf (distr-disj prop)))
+					  ((literal-disj-p prop) prop)
+					   (t (format t "~A~%" prop) (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
 	(t (error "Incorrect input"))))
 
 ;;; RESOLUTION

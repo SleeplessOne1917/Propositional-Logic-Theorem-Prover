@@ -1,6 +1,6 @@
 ;;; Variables used in resolution
 (defvar *clauses* ())
-(defvar *clause-pairs* (make-hash-table))
+(defvar *clause-pairs* (make-hash-table :test #'equal))
 
 ;;; Logical symbols
 (defconstant -> '->)
@@ -54,12 +54,19 @@ negation of an atom."
        (literal-p (prop1 prop))
        (literal-p (prop2 prop))))
 
-(defun sub-literal-disj-p (prop)
-  "Return true if a disjunction is made of a disjunction of literals."
-  (and (or (literal-p (prop1 prop)) 
-       (and (disj-p (prop1 prop)) (literal-parts-p (prop1 prop))))
-      (or (literal-p (prop2 prop))
-       (and (disj-p (prop2 prop)) (literal-parts-p (prop2 prop))))))
+(defun literal-disj-p (prop)
+  "Return true if PROP is a disjunction made of literals or disjunctions of literals."
+  (labels ((disj-or-lit-p (p)
+	     (cond ((literal-p p) t)
+		   ((made-of-disj-or-lit-p p)
+		    (and (disj-or-lit-p (prop1 p)) (disj-or-lit-p (prop2 p))))
+		   (t nil)))
+	   (made-of-disj-or-lit-p (p)
+	     (and (or (literal-p (prop1 p)) (disj-p (prop1 p)))
+		  (or (literal-p (prop2 p)) (disj-p (prop2 p))))))
+    (if (disj-p prop)
+	(disj-or-lit-p prop)
+	nil)))
 
 ;;;Selectors
 (defun connector (prop)
@@ -151,13 +158,13 @@ Assumes at least one of the component propositions is an implication."
 (defmacro cnf-cond-conj-disj (prop &rest conds)
   "Cover conditions common to converting conjunctions or disjunctions
 during conversion to CNF in addition to those specified in conds."
-  `(cond ((literal-parts-p ,prop) ,prop)
+  `(cond ((literal-parts-p ,prop) (format t "~A~%" ,prop) ,prop)
 	 ((or (bicond-p (prop1 ,prop)) (bicond-p (prop2 ,prop))) 
-	  (cnf (expand-sub-bicond ,prop)))
+	  (format t "~A~%" ,prop) (cnf (expand-sub-bicond ,prop)))
 	 ((or (impl-p (prop1 ,prop)) (impl-p (prop2 ,prop)))
-	  (cnf (expand-sub-impl ,prop)))
+	  (format t "~A~%" prop) (cnf (expand-sub-impl ,prop)))
 	 ,@conds))
-;(((~ (R ^ (~ P))) V (~ Q)) V (~ P))
+
 (defun cnf (prop)
   "Put proposition in CNF if not already."
   (cond ((literal-p prop) prop)
@@ -165,12 +172,12 @@ during conversion to CNF in addition to those specified in conds."
 	((impl-p prop) (cnf (expand-impl prop)))
 	((bicond-p prop) (cnf (expand-bicond prop)))
 	((conj-p prop) (cnf-cond-conj-disj prop 
-					   (t (list (cnf (prop1 prop)) ^ (cnf (prop2 prop))))))
+					   (t  (list (cnf (prop1 prop)) ^ (cnf (prop2 prop))))))
 	((disj-p prop) (cnf-cond-conj-disj prop
 					  ((or (conj-p (prop1 prop)) (conj-p (prop2 prop)))
-					    (cnf (distr-disj prop)))
-					  ((sub-literal-disj-p prop) prop)
-					   (t (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
+					   (cnf (distr-disj prop)))
+					  ((literal-disj-p prop) prop)
+					  (t  (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
 	(t (error "Incorrect input"))))
 
 ;;; RESOLUTION
@@ -186,10 +193,18 @@ Removal is shallow."
   "Checks to see if sets S1 and S2 are equal."
   (not (set-difference S1 S2)))
 
+(defun literal-lessp (L1 L2)
+  "Return true if the string representation of L1 is less than L2 if both are
+variables or negations. If a variable is compared to a negation, the variable
+is considered less."
+  (cond ((and (atom-p L1) (atom-p L2)) (string-lessp (string L1) (string L2)))
+	((and (neg-p L1) (neg-p L2)) (string-lessp (string (neg-operand L1)) (string (neg-operand L2))))
+	(t (neg-p L2))))
+
 (defun clear ()
   "Clear clauses, clause pairs, and tried clause pairs."
   (setf *clauses* ())
-  (setf *clause-pairs* (make-hash-table)))
+  (setf *clause-pairs* (make-hash-table :test #'equal)))
 
 (defun disj-to-set (P)
   "Convert a P into a set of its literals without connectors.
@@ -198,14 +213,29 @@ Assumes P is a disjunction of literals or other disjunctions."
       (union (disj-to-set (prop1 P)) (disj-to-set (prop2 P)))
       (make-set P)))
 
+(defun set-to-clause (S)
+  "Convert set S into clausal form. Sorts S for hash key comparison
+purposes and removes literals that are negations of eachother:
+e.g. if both P and (~ P) are present in S, both are removed."
+  (labels ((remove-neg-pairs (set)
+	   (let ((neg (bring-in-negation (negate (first set)))))
+	       (cond ((endp set) nil)
+		     ((member neg (rest set) :test #'equal)
+		      (remove-neg-pairs (remove neg (rest set) :test #'equal)))
+		     (t (cons (first set) (remove-neg-pairs (rest set))))))))
+    (sort (remove-neg-pairs S) #'literal-lessp)))
+
+(defun disj-to-clause (D)
+  "Convert disj D into clause."
+  (set-to-clause (disj-to-set D)))
+
 (defun add-to-clauses (prop)
   "Takes PROP (assumed to be in CNF), convert each conjunct into
-a set of literals, and add each of those sets to *CLAUSES* if not
-already present."
+clauses, and add each of those sets to *CLAUSES* if notalready present."
   (cond ((conj-p prop) (add-to-clauses (prop1 prop))
 	 (add-to-clauses (prop2 prop)))
-	((disj-p prop) (pushnew (disj-to-set prop) *clauses*))
-	(t (pushnew (make-set prop) *clauses*))))
+	((disj-p prop) (if (disj-to-clause prop)(pushnew (disj-to-clause prop) *clauses* :test #'equal)))
+	(t (pushnew (make-set prop) *clauses* :test #'equal))))
 
 ;;;RESOLUTION
 (defun resolve (C1 C2)
@@ -221,17 +251,50 @@ or nil otherwise."
 				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
 			    t))))))
 
+(defun clause-lessp (C1 C2)
+  "Return whether clause C1 is less than C2. Tests the car of C1 is literal-lessp
+C2."
+  (cond ((set-equal C1 C2) nil)
+	((endp C1) t)
+	((endp C2) nil)
+	((literal-lessp (first C1) (first C2)) t)
+	(t (clause-lessp (rest C1) (rest C2)))))
+
 (defun make-pairs-with-clause (clause)
   "Make every combination of CLAUSE and each member of clauses
 and add them to *CLAUSE-PAIRS* if not already present."
   (dolist (cl *clauses*)
-    (multiple-value-bind (tried set) (gethash (make-set (list clause cl)) *clause-pairs*)
+    (multiple-value-bind (tried set) (gethash (sort (make-set (list clause cl)) #'clause-lessp) *clause-pairs*)
       (if (not (or set (equal clause cl)))
-	  (setf (gethash (make-set (list clause cl)) *clause-pairs*) nil)
-	  tried))))
+	  (setf (gethash (sort (make-set (list clause cl)) #'clause-lessp) *clause-pairs*) nil)))))
 
 (defun make-clause-pairs ()
   "Make all combinations of two clauses from CLAUSES and and put them
 in clause pairs."
   (dolist (clause *clauses*)
     (make-pairs-with-clause clause)))
+
+(defun all-pairs-tried-p ()
+  "Return true if all pairs of clauses have been tried"
+  (let ((retval t))
+    (loop for val being the hash-values in *clause-pairs*
+       do (if (not val) (setf retval nil)))
+  retval))
+
+(defun tautology-p (P)
+  "Return true if P is a tautology, nil otherwise."
+  (clear)
+  (add-to-clauses (negate (cnf P)))
+  (make-clause-pairs)
+  
+  (do ((new-clauses nil nil))
+      ((all-pairs-tried-p) nil)
+    (flet ((resolve-pairs (key val)
+	     (if (not val)
+		 (let ((clause (resolve (first key) (second key))))
+		   (add-to-clauses clause)
+		   (pushnew clause new-clauses :test #'equal)
+		   (setf (gethash key *clause-pairs*) t)))))
+      (maphash #'resolve-pairs *clause-pairs*)
+      (if (member nil *clauses*) (progn (format t "Is Tautology~%") (return-from tautology-p t)))
+      (mapcar #'make-pairs-with-clause new-clauses))))

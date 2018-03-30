@@ -133,14 +133,14 @@ and applying DeMorgan's law to conjunctions and disjunctions."
 	  (negs-supplied-p
 	   (if has-even-negs 
 	       (double-neg-bring-in F operand nil)                       ;F is negation with even # of negation symbols
-	       (double-neg-bring-in  F (negate operand) t)))             ;F is a negation with an odd # of negation symbols		 
+	       (double-neg-bring-in  F (weak-negate operand) t)))             ;F is a negation with an odd # of negation symbols		 
 	  ((disj-p operand)
-	   `(,(negate phi) ^ ,(negate psy)))
+	   `(,(weak-negate phi) ^ ,(weak-negate psy)))
 	  ((conj-p operand)                   
-	   `(,(negate phi) v ,(negate psy)))
+	   `(,(weak-negate phi) v ,(weak-negate psy)))
 	  ((impl-p operand) (bring-in-negation `(~ ,(expand-impl operand))))
 	  ((bicond-p operand) (bring-in-negation `(~ ,(expand-bicond operand))))
-	  (t (double-neg-bring-in F (negate operand) t)))))))
+	  (t (double-neg-bring-in F (weak-negate operand) t)))))))
 
 (defun distr-disj (F)
   "Distribute disjunction; e.g. (P v (Q ^ R))
@@ -155,20 +155,23 @@ and at least one of the sub Fositions is a conjunction."
   "Convert form of the form P -> Q to
 ~P v Q. Assumes F is a implication."
   (with-phi-and-psy (F phi psy) 
-    `(,(negate phi) v ,psy)))
+    `(,(weak-negate phi) v ,psy)))
 
 (defun expand-bicond (F)
   "Convert form of the form P <-> Q
 to ((~ P) v Q) ^ ((~ Q) v P). Assumes F is a biconditional."
   (with-phi-and-psy (F phi psy)
-    `((,(negate phi) v ,psy) ^ (,(negate psy) v ,phi))))
+    `((,(weak-negate phi) v ,psy) ^ (,(weak-negate psy) v ,phi))))
 
-;;;TODO: Make function that also brings in the return of negate
-(defun negate (F)
-  "Negate a form."
+(defun weak-negate (F)
+  "Add a negation sign to a form without performing negation."
   (if (neg-p F)
       (cons ~ F)
       `(~ ,F)))
+
+(defun negate (F)
+  "Negate F"
+  (bring-in-negation (weak-negate F)))
 
 (defun expand-sub-bicond (F)
   "Expand a biconditional that makes up the form.
@@ -287,7 +290,7 @@ are negations of eachother: e.g. if both P and (~ P) are present in S, both are 
       ;; Recursively step throufh set removing both a variable and its negation if both
       ;; are present. 
       ((remove-neg-pairs (set)
-	 (let ((neg (bring-in-negation (negate (first set)))))
+	 (let ((neg (negate (first set))))
 	   (cond ((endp set) nil)
 		 ((member neg (rest set) :test #'equal)                     
 		  (remove-neg-pairs (remove neg (rest set) :test #'equal)))
@@ -374,17 +377,17 @@ in clause pairs."
 is the new clause, if one can be made. The second value returns t if the clauses resolve,
 nil otherwise."
   (dolist (literal C1 (values nil nil))
-    (if (member (bring-in-negation (negate literal)) C2 :test #'equal)
+    (if (member (negate literal) C2 :test #'equal)
 	(if (and (= (length C1) 1) (= (length C2) 1))
 	    (return (values nil t))
 	    (return (values (union (remove literal C1 :test #'equal) 
-				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
+				   (remove (negate literal) C2 :test #'equal))
 			    t))))))
 
 (defun tautology-p (P)
   "Return t if P is a tautology, nil otherwise."
   (clear)
-  (add-to-clauses (cnf (negate P)))
+  (add-to-clauses (cnf (weak-negate P)))
   (make-clause-pairs)
   
   (do ((new-clauses nil nil))

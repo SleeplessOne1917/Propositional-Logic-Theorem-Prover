@@ -3,7 +3,7 @@
 ;;;; Propositional logic theorem prover to determine if a well formed formula is a tautology.
 ;;;; Performs proofs by contradiction by first negating the wff and converting it into cnf.
 ;;;; Then, each conjunct of the result is turned into a clause. Resolution is applied to both these original
-;;;; clauses as well as new clauses produced during the proof until either nil is produced or all pairs
+;;;; clauses and new clauses produced during the proof until either nil is produced or all pairs
 ;;;; of clauses have been tried.
 
 ;;;; TABLE OF CONTENTS
@@ -111,9 +111,7 @@ negation of an variable."
 	  (,psy (psy ,F)))
      ,@body))
 
-;;; TODO: Move optional has-even-negs argument into a local function.
-;;; Top level callers have no need to specify this parameter
-(defun bring-in-negation (F &optional (has-even-negs nil negs-supplied-p))
+(defun bring-in-neg (F)
   "Simplify negation F by eliminating extra negations signs
 and applying DeMorgan's law to conjunctions and disjunctions."
   (labels 
@@ -124,23 +122,26 @@ and applying DeMorgan's law to conjunctions and disjunctions."
        ;; extra "~"s are removed
        (double-neg-bring-in (p else &optional (even-negs nil))
 	 (if (double-neg-p p)
-	     (bring-in-negation (rest p) even-negs)
-	     else)))
-    (let ((operand (neg-operand F)))
-      (with-phi-and-psy (operand phi psy)
-	(cond 
-	  ;; Only true if form from the first call to function is a negation of a negation
-	  (negs-supplied-p
-	   (if has-even-negs 
-	       (double-neg-bring-in F operand nil)                       ;F is negation with even # of negation symbols
-	       (double-neg-bring-in  F (weak-negate operand) t)))             ;F is a negation with an odd # of negation symbols		 
-	  ((disj-p operand)
-	   `(,(weak-negate phi) ^ ,(weak-negate psy)))
-	  ((conj-p operand)                   
-	   `(,(weak-negate phi) v ,(weak-negate psy)))
-	  ((impl-p operand) (bring-in-negation `(~ ,(expand-impl operand))))
-	  ((bicond-p operand) (bring-in-negation `(~ ,(expand-bicond operand))))
-	  (t (double-neg-bring-in F (weak-negate operand) t)))))))
+	     (bring-in-neg-rec (rest p) even-negs)
+	     else))
+       ;; Recursive local function to do most of the work. Using a local function prevents
+       ;; users from passing in a value for HAS-EVEN-NEGS.
+       (bring-in-neg-rec (F &optional (has-even-negs nil negs-supplied-p))
+	 (let ((operand (neg-operand F)))
+	   (cond 
+	     ;; Only true if form from the first call to function is a negation of a negation
+	     (negs-supplied-p
+	      (if has-even-negs 
+		  (double-neg-bring-in F operand nil)                       ;F is negation with even # of negation symbols
+		  (double-neg-bring-in  F (weak-negate operand) t)))        ;F is a negation with an odd # of negation symbols		 
+	     ((disj-p operand)
+	      `(,(weak-negate (phi operand)) ^ ,(weak-negate (psy operand))))
+	     ((conj-p operand)                   
+	      `(,(weak-negate (phi operand)) v ,(weak-negate (psy operand))))
+	     ((impl-p operand) (bring-in-neg-rec `(~ ,(expand-impl operand))))
+	     ((bicond-p operand) (bring-in-neg-rec `(~ ,(expand-bicond operand))))
+	     (t (double-neg-bring-in F (weak-negate operand) t))))))
+    (bring-in-neg-rec F)))
 
 (defun distr-disj (F)
   "Distribute disjunction; e.g. (P v (Q ^ R))
@@ -171,7 +172,7 @@ to ((~ P) v Q) ^ ((~ Q) v P). Assumes F is a biconditional."
 
 (defun negate (F)
   "Negate F"
-  (bring-in-negation (weak-negate F)))
+  (bring-in-neg (weak-negate F)))
 
 (defun expand-sub-bicond (F)
   "Expand a biconditional that makes up the form.
@@ -189,7 +190,7 @@ Assumes at least one of the component forms is an implication."
 	`(,(expand-impl phi) ,(connector F) ,psy)
 	`(,phi ,(connector F) ,(expand-impl psy)))))
 
-(defun litepral-parts-p (F)
+(defun literal-parts-p (F)
   "Return true if F is a of the form: <lit> ("->" | "<->" | "v" | "^") <lit>"
   (and (listp F)  
        (literal-p (phi F))
@@ -218,17 +219,17 @@ Assumes at least one of the component forms is an implication."
 (defmacro cnf-cond-conj-disj (F &rest conds)
   "Cover conditions common to converting conjunctions or disjunctions
 to CNF in addition to those specified in conds."
-  `(cond ((literal-parts-p ,F) (format t "~A~%" ,F) ,F)
+  `(cond ((literal-parts-p ,F) ,F)
 	 ((or (bicond-p (phi ,F)) (bicond-p (psy ,F))) 
-	  (format t "~A~%" ,F) (cnf (expand-sub-bicond ,F)))
+	  (cnf (expand-sub-bicond ,F)))
 	 ((or (impl-p (phi ,F)) (impl-p (psy ,F)))
-	  (format t "~A~%" F) (cnf (expand-sub-impl ,F)))
+	  (cnf (expand-sub-impl ,F)))
 	 ,@conds))
 
 (defun cnf (F)
   "Put form in CNF if not already."
   (cond ((literal-p F) F)
-	((neg-p F) (cnf (bring-in-negation F)))
+	((neg-p F) (cnf (bring-in-neg F)))
 	((impl-p F) (cnf (expand-impl F)))
 	((bicond-p F) (cnf (expand-bicond F)))
 	((conj-p F) (cnf-cond-conj-disj F 
@@ -261,9 +262,9 @@ to CNF in addition to those specified in conds."
   "Turn L into a set by removing duplicate elements.
 Removal is shallow."
   (cond ((literal-p L) (list L))
-    ((endp L) nil)
-    ((find (first L) (rest L)) (make-set (rest L)))
-    (t (cons (first L) (make-set (rest L))))))
+	((endp L) nil)
+	((find (first L) (rest L)) (make-set (rest L)))
+	(t (cons (first L) (make-set (rest L))))))
 
 (defun set-equal (S1 S2) 
   "Return t if S1 and S2 are equal sets, nil otherwise."

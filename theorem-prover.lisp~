@@ -1,14 +1,248 @@
 ;;;; THEOREM-PROVER.LISP
 ;;;; Author: Anthony Bias
-;;;; Propositional logic theorem prover. Converts well formed formulas into
-;;;; CNF, then into clauses (implemented as ordered sets). Then it applies 
-;;;; the resolution algorithm to each pair of clauses until either nil is produced
-;;;; or all pairs are tried.
+;;;; Propositional logic theorem prover to determine if a well formed formula is a tautology.
+;;;; Performs proofs by contradiction by first negating the wff and converting it into cnf.
+;;;; Then, each conjunct of the result is turned into a clause. Resolution is applied to both these original
+;;;; clauses as well as new clauses produced during the proof until either nil is produced or all pairs
+;;;; of clauses have been tried.
 
-;;; Variables used in resolution
+;;;; TABLE OF CONTENTS
+;;;;------------------------
+;;;; 1: LOGICAL SYMBOLS
+;;;; 2: FORM PREDICATES
+;;;; 3: SELECTORS
+;;;; 4: CNF
+;;;; 5: CLAUSE CREATION
+;;;; 6: CLAUSE PAIRS
+;;;; 7: RESOLUTION
+;;;; 8: TESTS
 
-;;; Set of each clause produced in the proof so far. Each clause is an ordered pair
-;;; for reasons explained below TODO: Label sections with numbers and make toc
+;;;; 1: LOGICAL SYMBOLS ==============================================================================
+(defconstant -> '->)           ;Material implication
+(defconstant <-> '<->)         ;Biconditional
+(defconstant v 'v)             ;Disjunction
+(defconstant ^ '^)             ;Conjunction
+(defconstant ~ '~)             ;Negation
+
+;;;; 2: FORM PREDICATES ================================================================================
+
+;;;; Forms are are either a variable, the negation of a variable, or any two forms joined
+;;;; by a connective.
+;;;; <form> ::= <lit> | <form> ("->" | "<->" | "v" | "^") <form>
+
+;;; Variables are forms that consist of a single propositional variable, e.g. P, Q, R, T, etc.
+;;; <var> ::= variable
+(defun variable-p (F)
+  "Return true if F is an variable."
+  (and (not (symbol-p F)) (not (listp F))))
+
+;;; A symbol is any of the binary connectives or the negation sign
+;;; <sym> ::= "->" | "<->" | "v" | "^" | "~"
+(defun symbol-p (F) 
+  "Return true if F is one of the defined logical symbol."
+  (or (eq F ->) 
+      (eq F <->) 
+      (eq F ~)
+      (eq F v)
+      (eq F ^)))
+
+;;; Literals are variables or negations of variables, e.g. P, (~ P), Q, (~ Q), etc.
+;;; <lit> ::= ["~"] <var>
+(defun literal-p (F)
+  "Return true if an variable is an variable or the
+negation of an variable."
+  (or (variable-p F) (and (neg-p F) 
+			 (variable-p (neg-operand F)))))
+
+;;; Conjunctions are forms that consist of two forms joinend with ^,
+;;; e.g. (P ^ Q), ((~ Q) ^ (R v (~ T))), etc.
+;;; <conj> ::= <form> "^" <form>
+(defun conj-p (F)
+  "Retrun true if the Fosition is a conjunction."
+  (and (listp F) (eq ^ (connector F))))
+
+;;; Disjunctions are forms that consist of two forms joined with v,
+;;; e.g. (T v G), ((P ^ R) v (R v (~ Q)))
+;;; <disj> ::= <form> "v" <form>
+(defun disj-p (F)
+  "Retrun true if the Fosition is a conjunction."
+  (and (listp F) (eq v (connector F))))
+
+;;; Negations are forms preceded by ~, e.g. (~ P), (~ (R -> T)), (~ R), etc.
+;;; <neg> ::= "~" {"~"} <form>
+(defun neg-p (F)
+  "Return true if F is a negation."
+  (and (listp F) (eq (neg-sign F) ~)))
+
+;;; Implications are forms joined by ->, e.g. (P -> Q), ((~ R) -> (T ^ Q)), etc.
+;;; <impl> ::= <form> "->" <form>
+(defun impl-p (F)
+  "Return true if F is an implication."
+  (and (listp F) (eq (connector F) ->)))
+
+;;; Biconditionals are forms joined by <->, e.g. (Q <-> R), (((~ P) ^ T) <-> Q), 
+;;; ((Q -> R) <-> ((~P) ^ T)), etc.
+;;; <bicond> ::= <form> "<->" <form>
+(defun bicond-p (F)
+  "Return true if F is a biconditional."
+  (and (listp F) (eq (connector F) <->)))
+
+;;;; 3: SELECTORS =======================================================================
+(defun connector (F)
+  (second F))
+
+(defun phi (F)
+  (first F))
+
+(defun psy (F)
+  (third F))
+
+(defun neg-sign (F)
+  (first F))
+
+(defun neg-operand (F)
+  (second F))
+
+;;;; 4: CNF =============================================================================================
+;;;; The following are functions and macros used to convert a form into cnf
+
+(defmacro with-phi-and-psy ((F phi psy) &body body)
+  `(let ((,phi (phi ,F))
+	  (,psy (psy ,F)))
+     ,@body))
+
+(defun bring-in-neg (F &optional (has-even-negs nil negs-supplied-p))
+  "Simplify negation F by eliminating extra negations signs
+and applying DeMorgan's law to conjunctions and disjunctions."
+  (labels 
+      ;; Return true if P is a negation of a negation
+      ((double-neg-p (p)
+	 (eq (neg-operand p) ~))
+       ;; Recursively bring in negation P. ELSE handles base case when all
+       ;; extra "~"s are removed
+       (double-neg-bring-in (p else &optional (even-negs nil))
+	 (if (double-neg-p p)
+	     (bring-in-neg (rest p) even-negs)
+	     else)))
+    (let ((operand (neg-operand F)))
+      (cond 
+	;; Only true if form from the first call to function is a negation of a negation
+	(negs-supplied-p
+	 (if has-even-negs 
+	     (double-neg-bring-in F operand nil)                       ;F is negation with even # of negation symbols
+	     (double-neg-bring-in  F (weak-negate operand) t)))             ;F is a negation with an odd # of negation symbols		 
+	((disj-p operand)
+	 `(,(weak-negate (phi operand)) ^ ,(weak-negate (psy operand))))
+	((conj-p operand)                   
+	 `(,(weak-negate (phi operand)) v ,(weak-negate (psy operand))))
+	((impl-p operand) (bring-in-neg `(~ ,(expand-impl operand))))
+	((bicond-p operand) (bring-in-neg `(~ ,(expand-bicond operand))))
+	(t (double-neg-bring-in F (weak-negate operand) t))))))
+
+(defun distr-disj (F)
+  "Distribute disjunction; e.g. (P v (Q ^ R))
+becomes (P v Q) ^ (P v R). Assumes F is a disjunction
+and at least one of the sub Fositions is a conjunction."
+  (with-phi-and-psy (F phi psy)
+    (if (conj-p phi)
+	`((,(phi phi) v ,psy) ^ (,(psy phi) v ,psy))
+	`((,(phi psy) v ,phi) ^ (,(psy psy) v ,phi)))))
+
+(defun expand-impl (F)
+  "Convert form of the form P -> Q to
+~P v Q. Assumes F is a implication."
+  (with-phi-and-psy (F phi psy) 
+    `(,(weak-negate phi) v ,psy)))
+
+(defun expand-bicond (F)
+  "Convert form of the form P <-> Q
+to ((~ P) v Q) ^ ((~ Q) v P). Assumes F is a biconditional."
+  (with-phi-and-psy (F phi psy)
+    `((,(weak-negate phi) v ,psy) ^ (,(weak-negate psy) v ,phi))))
+
+(defun weak-negate (F)
+  "Add a negation sign to a form without performing negation."
+  (if (neg-p F)
+      (cons ~ F)
+      `(~ ,F)))
+
+(defun negate (F)
+  "Negate F"
+  (bring-in-neg (weak-negate F)))
+
+(defun expand-sub-bicond (F)
+  "Expand a biconditional that makes up the form.
+Assumes at least one of the component forms is a biconditional."
+  (with-phi-and-psy (F phi psy)
+    (if (bicond-p phi)
+	`(,(expand-bicond phi) ,(connector F) ,psy)
+	`(,phi ,(connector F) ,(expand-bicond psy)))))
+
+(defun expand-sub-impl (F)
+  "Expand an implication that makes up the form.
+Assumes at least one of the component forms is an implication."
+  (with-phi-and-psy (F phi psy)
+    (if (impl-p phi)
+	`(,(expand-impl phi) ,(connector F) ,psy)
+	`(,phi ,(connector F) ,(expand-impl psy)))))
+
+(defun literal-parts-p (F)
+  "Return true if F is a of the form: <lit> ("->" | "<->" | "v" | "^") <lit>"
+  (and (listp F)  
+       (literal-p (phi F))
+       (literal-p (psy F))))
+
+(defun literal-disj-p (F)
+  "Return true if F is a disjunction made of literals or disjunctions of literals."
+  (labels 
+      ;; Recursively check if P consists of literals or disjunctions. Called by top level
+      ;; function to cause conjunctions to percolate up during conversion to cnf.
+      ((disj-or-lit-p (p)
+	 (cond ((literal-p p) t)
+	       ((made-of-disj-or-lit-p p)
+		(and (disj-or-lit-p (phi p)) (disj-or-lit-p (psy p))))
+	       (t nil)))
+       (made-of-disj-or-lit-p (p)
+	 (and (or (literal-p (phi p)) (disj-p (phi p)))
+	      (or (literal-p (psy p)) (disj-p (psy p))))))
+    ;; Only call local function if F is a disjunction
+    (if (disj-p F)
+	(disj-or-lit-p F)
+	nil)))
+
+;;; Used to remove code repetition from the conditions in the function CNF
+;;; that handle conjunctions and disjunctions
+(defmacro cnf-cond-conj-disj (F &rest conds)
+  "Cover conditions common to converting conjunctions or disjunctions
+to CNF in addition to those specified in conds."
+  `(cond ((literal-parts-p ,F) ,F)
+	 ((or (bicond-p (phi ,F)) (bicond-p (psy ,F))) 
+	  (cnf (expand-sub-bicond ,F)))
+	 ((or (impl-p (phi ,F)) (impl-p (psy ,F)))
+	  (cnf (expand-sub-impl ,F)))
+	 ,@conds))
+
+(defun cnf (F)
+  "Put form in CNF if not already."
+  (cond ((literal-p F) F)
+	((neg-p F) (cnf (bring-in-neg F)))
+	((impl-p F) (cnf (expand-impl F)))
+	((bicond-p F) (cnf (expand-bicond F)))
+	((conj-p F) (cnf-cond-conj-disj F 
+					   (t  (list (cnf (phi F)) ^ (cnf (psy F))))))
+	((disj-p F) (cnf-cond-conj-disj F
+					   ((or (conj-p (phi F)) (conj-p (psy F)))
+					    (cnf (distr-disj F)))
+					   ((literal-disj-p F) F)
+					   (t  (cnf (list (cnf (phi F)) v (cnf (psy F)))))))
+	(t (error "Incorrect input"))))
+
+;;;; 5: CLAUSE CREATION ===============================================================================
+;;;; This section contains functions that convert forms in cnf into clauses. Clauses are implemented as 
+;;;; ordered sets. The sets must be orderd because the hash table used for tracking clause pairs only
+;;;; accepts four built in equality predicates, precluding the use of the set equality predicate.
+
+;;; Set of each clause produced in the proof so far.
 (defvar *clauses* ())
 
 ;;; Maps two-element ordered sets of clauses to whether they have already been tried.
@@ -20,236 +254,13 @@
   (setf *clauses* ())
   (setf *clause-pairs* (make-hash-table :test #'equal)))
 
-;;;; LOGICAL SYMBOLS
-(defconstant -> '->)           ;Material implication
-(defconstant <-> '<->)         ;Biconditional
-(defconstant v 'v)             ;Disjunction
-(defconstant ^ '^)             ;Conjunction
-(defconstant ~ '~)             ;Negation
-
-;;;; FORM PREDICATES
-
-;;; Forms are are either a variable, the negation of a variable, or any two forms joined
-;;; by a connective.
-;;; <form> ::= <lit> | <form> ("->" | "<->" | "v" | "^") <form>
-
-;;; Variables are forms that consist of a single propositional variable, e.g. P, Q, R, T, etc.
-;;; <var> ::= variable
-(defun variable-p (prop)
-  "Return true if prop is an variable."
-  (and (not (symbol-p prop)) (not (listp prop))))
-
-;;; A symbol is any of the binary connectives or the negation sign
-;;; <sym> ::= "->" | "<->" | "v" | "^" | "~"
-(defun symbol-p (prop) 
-  "Return true if prop is one of the defined logical symbol."
-  (or (eq prop ->) 
-      (eq prop <->) 
-      (eq prop ~)
-      (eq prop v)
-      (eq prop ^)))
-
-;;; Literals are variables or negations of variables, e.g. P, (~ P), Q, (~ Q), etc.
-;;; <lit> ::= ["~"] <var>
-(defun literal-p (prop)
-  "Return true if an variable is an variable or the
-negation of an variable."
-  (or (variable-p prop) (and (neg-p prop) 
-			 (variable-p (neg-operand prop)))))
-
-;;; Conjunctions are forms that consist of two forms joinend with ^,
-;;; e.g. (P ^ Q), ((~ Q) ^ (R v (~ T))), etc.
-;;; <conj> ::= <form> "^" <form>
-(defun conj-p (prop)
-  "Retrun true if the proposition is a conjunction."
-  (and (listp prop) (eq ^ (connector prop))))
-
-;;; Disjunctions are forms that consist of two forms joined with v,
-;;; e.g. (T v G), ((P ^ R) v (R v (~ Q)))
-;;; <disj> ::= <form> "v" <form>
-(defun disj-p (prop)
-  "Retrun true if the proposition is a conjunction."
-  (and (listp prop) (eq v (connector prop))))
-
-;;; Negations are forms preceded by ~, e.g. (~ P), (~ (R -> T)), (~ R), etc.
-;;; <neg> ::= "~" {"~"} <form>
-(defun neg-p (prop)
-  "Return true if prop is a negation."
-  (and (listp prop) (eq (neg-sign prop) ~)))
-
-;;; Implications are forms joined by ->, e.g. (P -> Q), ((~ R) -> (T ^ Q)), etc.
-;;; <impl> ::= <form> "->" <form>
-(defun impl-p (prop)
-  "Return true if prop is an implication."
-  (and (listp prop) (eq (connector prop) ->)))
-
-;;; Biconditionals are forms joined by <->, e.g. (Q <-> R), (((~ P) ^ T) <-> Q), 
-;;; ((Q -> R) <-> ((~P) ^ T)), etc.
-;;; <bicond> ::= <form> "<->" <form>
-(defun bicond-p (prop)
-  "Return true if prop is a biconditional."
-  (and (listp prop) (eq (connector prop) <->)))
-
-;;;; SELECTORS
-(defun connector (prop)
-  (second prop))
-
-(defun prop1 (prop)
-  (first prop))
-
-(defun prop2 (prop)
-  (third prop))
-
-(defun neg-sign (prop)
-  (first prop))
-
-(defun neg-operand (prop)
-  (second prop))
-
-;;;; CNF
-;;;; The following are functions and macros used to convert a form into cnf
-(defmacro with-props ((prop prop1 prop2) &body body)
-  `(let ((,prop1 (prop1 ,prop))
-	  (,prop2 (prop2 ,prop)))
-     ,@body))
-
-;;; TODO: Move optional has-even-negs argument into a local function.
-;;; Top level callers have no need to specify this parameter
-(defun bring-in-negation (prop &optional (has-even-negs nil negs-supplied-p))
-  "Simplify negation PROP by eliminating extra negations signs
-and applying DeMorgan's law to conjunctions and disjunctions."
-  (labels 
-      ;; Return true if P is a negation of a negation
-      ((double-neg-p (p)
-	 (eq (neg-operand p) ~))
-       ;; Recursively bring in negation P. ELSE handles base case when all
-       ;; extra "~"s are removed
-       (double-neg-bring-in (p else &optional (even-negs nil))
-	 (if (double-neg-p p)
-	     (bring-in-negation (rest p) even-negs)
-	     else)))
-    (let ((operand (neg-operand prop)))
-      (cond 
-	;; Only true if form from the first call to function is a negation of a negation
-	(negs-supplied-p
-	 (if has-even-negs 
-	     (double-neg-bring-in prop operand nil)                       ;prop is negation with even # of negation symbols
-	     (double-neg-bring-in  prop (negate operand) t)))             ;prop is a negation with an odd # of negation symbols		 
-	((disj-p operand)
-	 `(,(negate (prop1 operand)) ^ ,(negate (prop2 operand))))
-	((conj-p operand)                   
-	 `(,(negate (prop1 operand)) v ,(negate (prop2 operand))))
-	((impl-p operand) (bring-in-negation `(~ ,(expand-impl operand))))
-	((bicond-p operand) (bring-in-negation `(~ ,(expand-bicond operand))))
-	(t (double-neg-bring-in prop (negate operand) t))))))
-
-(defun distr-disj (prop)
-  "Distribute disjunction; e.g. (P v (Q ^ R))
-becomes (P v Q) ^ (P v R). Assumes prop is a disjunction
-and at least one of the sub propositions is a conjunction."
-  (with-props (prop p1 p2)
-    (if (conj-p p1)
-	`((,(prop1 p1) v ,p2) ^ (,(prop2 p1) v ,p2))
-	`((,(prop1 p2) v ,p1) ^ (,(prop2 p2) v ,p1)))))
-
-(defun expand-impl (prop)
-  "Convert proposition of the form P -> Q to
-~P v Q. Assumes prop is a implication."
-  (with-props (prop p1 p2) 
-    `(,(negate p1) v ,p2)))
-
-(defun expand-bicond (prop)
-  "Convert proposition of the form P <-> Q
-to ((~ P) v Q) ^ ((~ Q) v P). Assumes prop is a biconditional."
-  (with-props (prop p1 p2)
-    `((,(negate p1) v ,p2) ^ (,(negate p2) v ,p1))))
-
-;;;TODO: Make function that also brings in the return of negate
-(defun negate (prop)
-  "Negate a proposition."
-  (if (neg-p prop)
-      (cons ~ prop)
-      `(~ ,prop)))
-
-(defun expand-sub-bicond (prop)
-  "Expand a biconditional that makes up the proposition.
-Assumes at least one of the component propositions is a biconditional."
-  (with-props (prop p1 p2)
-    (if (bicond-p p1)
-	`(,(expand-bicond p1) ,(connector prop) ,p2)
-	`(,p1 ,(connector prop) ,(expand-bicond p2)))))
-
-(defun expand-sub-impl (prop)
-  "Expand an implication that makes up the proposition.
-Assumes at least one of the component propositions is an implication."
-  (with-props (prop p1 p2)
-    (if (impl-p p1)
-	`(,(expand-impl p1) ,(connector prop) ,p2)
-	`(,p1 ,(connector prop) ,(expand-impl p2)))))
-
-(defun literal-parts-p (prop)
-  "Return true if prop is a of the form: <lit> ("->" | "<->" | "v" | "^") <lit>"
-  (and (listp prop)  
-       (literal-p (prop1 prop))
-       (literal-p (prop2 prop))))
-
-(defun literal-disj-p (prop)
-  "Return true if PROP is a disjunction made of literals or disjunctions of literals."
-  (labels 
-      ;; Recursively check if P consists of literals or disjunctions. Called by top level
-      ;; function to cause conjunctions to percolate up during conversion to cnf.
-      ((disj-or-lit-p (p)
-	 (cond ((literal-p p) t)
-	       ((made-of-disj-or-lit-p p)
-		(and (disj-or-lit-p (prop1 p)) (disj-or-lit-p (prop2 p))))
-	       (t nil)))
-       (made-of-disj-or-lit-p (p)
-	 (and (or (literal-p (prop1 p)) (disj-p (prop1 p)))
-	      (or (literal-p (prop2 p)) (disj-p (prop2 p))))))
-    ;; Only call local function if PROP is a disjunction
-    (if (disj-p prop)
-	(disj-or-lit-p prop)
-	nil)))
-
-;;; Used to remove code repetition from the conditions in the function CNF
-;;; that handle conjunctions and disjunctions
-(defmacro cnf-cond-conj-disj (prop &rest conds)
-  "Cover conditions common to converting conjunctions or disjunctions
-to CNF in addition to those specified in conds."
-  `(cond ((literal-parts-p ,prop) (format t "~A~%" ,prop) ,prop)
-	 ((or (bicond-p (prop1 ,prop)) (bicond-p (prop2 ,prop))) 
-	  (format t "~A~%" ,prop) (cnf (expand-sub-bicond ,prop)))
-	 ((or (impl-p (prop1 ,prop)) (impl-p (prop2 ,prop)))
-	  (format t "~A~%" prop) (cnf (expand-sub-impl ,prop)))
-	 ,@conds))
-
-(defun cnf (prop)
-  "Put proposition in CNF if not already."
-  (cond ((literal-p prop) prop)
-	((neg-p prop) (cnf (bring-in-negation prop)))
-	((impl-p prop) (cnf (expand-impl prop)))
-	((bicond-p prop) (cnf (expand-bicond prop)))
-	((conj-p prop) (cnf-cond-conj-disj prop 
-					   (t  (list (cnf (prop1 prop)) ^ (cnf (prop2 prop))))))
-	((disj-p prop) (cnf-cond-conj-disj prop
-					   ((or (conj-p (prop1 prop)) (conj-p (prop2 prop)))
-					    (cnf (distr-disj prop)))
-					   ((literal-disj-p prop) prop)
-					   (t  (cnf (list (cnf (prop1 prop)) v (cnf (prop2 prop)))))))
-	(t (error "Incorrect input"))))
-
-;;;; CLAUSE CREATION
-;;;; This section contains functions that convert forms in cnf into clauses. Clauses are implemented as 
-;;;; ordered sets. The sets must be orderd because the hash table used for tracking clause pairs only
-;;;; accepts four built in equality predicates, precluding the use of the set equality predicate.
-
 (defun make-set (L)
   "Turn L into a set by removing duplicate elements.
 Removal is shallow."
   (cond ((literal-p L) (list L))
-    ((endp L) nil)
-    ((find (first L) (rest L)) (make-set (rest L)))
-    (t (cons (first L) (make-set (rest L))))))
+	((endp L) nil)
+	((find (first L) (rest L)) (make-set (rest L)))
+	(t (cons (first L) (make-set (rest L))))))
 
 (defun set-equal (S1 S2) 
   "Return t if S1 and S2 are equal sets, nil otherwise."
@@ -266,7 +277,7 @@ Removal is shallow."
   "Convert a P into a set of its literals without connectors.
 Assumes P is a disjunction of literals or other disjunctions."
   (if (disj-p P)
-      (union (disj-to-set (prop1 P)) (disj-to-set (prop2 P)))
+      (union (disj-to-set (phi P)) (disj-to-set (psy P)))
       (make-set P)))
 
 (defun set-to-clause (S)
@@ -276,7 +287,7 @@ are negations of eachother: e.g. if both P and (~ P) are present in S, both are 
       ;; Recursively step throufh set removing both a variable and its negation if both
       ;; are present. 
       ((remove-neg-pairs (set)
-	 (let ((neg (bring-in-negation (negate (first set)))))
+	 (let ((neg (negate (first set))))
 	   (cond ((endp set) nil)
 		 ((member neg (rest set) :test #'equal)                     
 		  (remove-neg-pairs (remove neg (rest set) :test #'equal)))
@@ -302,21 +313,21 @@ in PLACE."
   `(if ,item
        (pushnew ,item ,place :test ,test)))
 
-(defun add-to-clauses (prop)
-  "Takes PROP (assumed to be in cnf), converts each conjunct into a
+(defun add-to-clauses (F)
+  "Takes F (assumed to be in cnf), converts each conjunct into a
 clause, and adds each to the clauss of the current proof if not already present."
-  (cond ((conj-p prop) (add-to-clauses (prop1 prop))
-	 (add-to-clauses (prop2 prop)))
+  (cond ((conj-p F) (add-to-clauses (phi F))
+	 (add-to-clauses (psy F)))
 	;; Disjunctions and negations are only added to *clauses* after conversion of forms
 	;; into cnf. Nil must not be added at this point as resolution would not have yet been applied
 	;; to any pairs of clauses.
-	((disj-p prop) (pushnew-not-nil (disj-to-clause prop) *clauses* :test #'equal))
-	((neg-p prop) (pushnew-not-nil `(,prop) *clauses* :test #'equal))
-	;; set-p is t when prop is a clause or nil in the context of this program. 
-	((set-p prop) (pushnew (set-to-clause prop) *clauses* :test #'equal))
-	(t (pushnew (make-set prop) *clauses* :test #'equal))))
+	((disj-p F) (pushnew-not-nil (disj-to-clause F) *clauses* :test #'equal))
+	((neg-p F) (pushnew-not-nil `(,F) *clauses* :test #'equal))
+	;; set-p is t when F is a clause or nil in the context of this program. 
+	((set-p F) (pushnew (set-to-clause F) *clauses* :test #'equal))
+	(t (pushnew (make-set F) *clauses* :test #'equal))))
 
-;;;; CLAUSE PAIR USAGE
+;;;; 6: CLAUSE PAIRS ===========================================================================
 ;;;; Code in this section pertains to creating clause pairs and tracking if they have been used.
 ;;;; Each ordered set of clauses maps to a whether they have had resolution applied to them in
 ;;;; the current proof : t if they have, nil if not.
@@ -353,7 +364,7 @@ in clause pairs."
        do (if (not val) (setf retval nil)))
   retval))
 
-;;;; RESOLUTION
+;;;; 7: RESOLUTION ==========================================================================================
 ;;;; This section contains code to resolve two clauses. The resolution algorithm takes two clauses,
 ;;;; C1 and C2, and checks if the negation of an element x in C1 is a member of C2. If this is the case,
 ;;;; the union of the two clauses, without x or its negation, is produced.
@@ -363,17 +374,17 @@ in clause pairs."
 is the new clause, if one can be made. The second value returns t if the clauses resolve,
 nil otherwise."
   (dolist (literal C1 (values nil nil))
-    (if (member (bring-in-negation (negate literal)) C2 :test #'equal)
+    (if (member (negate literal) C2 :test #'equal)
 	(if (and (= (length C1) 1) (= (length C2) 1))
 	    (return (values nil t))
 	    (return (values (union (remove literal C1 :test #'equal) 
-				   (remove (bring-in-negation (negate literal)) C2 :test #'equal))
+				   (remove (negate literal) C2 :test #'equal))
 			    t))))))
 
 (defun tautology-p (P)
   "Return t if P is a tautology, nil otherwise."
   (clear)
-  (add-to-clauses (cnf (negate P)))
+  (add-to-clauses (cnf (weak-negate P)))
   (make-clause-pairs)
   
   (do ((new-clauses nil nil))
@@ -389,7 +400,7 @@ nil otherwise."
       (if (member nil *clauses*) (return t))
       (mapcar #'make-pairs-with-clause new-clauses))))
 
-;;; TESTS
+;;;; 8: TESTS ===========================================================================================
 (defvar t1 'P)
 (defvar t2 '(~ ~ ~ P))
 (defvar t3 '(P v (~ P)))

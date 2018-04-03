@@ -52,7 +52,7 @@
   "Return true if an variable is an variable or the
 negation of an variable."
   (or (variable-p F) (and (neg-p F) 
-			 (variable-p (neg-operand F)))))
+			  (variable-p (neg-operand F)))))
 
 ;;; Conjunctions are forms that consist of two forms joinend with ^,
 ;;; e.g. (P ^ Q), ((~ Q) ^ (R v (~ T))), etc.
@@ -108,7 +108,7 @@ negation of an variable."
 
 (defmacro with-phi-and-psy ((F phi psy) &body body)
   `(let ((,phi (phi ,F))
-	  (,psy (psy ,F)))
+	 (,psy (psy ,F)))
      ,@body))
 
 (defun bring-in-neg (F)
@@ -214,32 +214,30 @@ Assumes at least one of the component forms is an implication."
 	(disj-or-lit-p F)
 	nil)))
 
-;;; Used to remove code repetition from the conditions in the function CNF
-;;; that handle conjunctions and disjunctions
-(defmacro cnf-cond-conj-disj (F &rest conds)
-  "Cover conditions common to converting conjunctions or disjunctions
-to CNF in addition to those specified in conds."
-  `(cond ((literal-parts-p ,F) ,F)
-	 ((or (bicond-p (phi ,F)) (bicond-p (psy ,F))) 
-	  (cnf (expand-sub-bicond ,F)))
-	 ((or (impl-p (phi ,F)) (impl-p (psy ,F)))
-	  (cnf (expand-sub-impl ,F)))
-	 ,@conds))
-
 (defun cnf (F)
   "Put form in CNF if not already."
-  (cond ((literal-p F) F)
-	((neg-p F) (cnf (bring-in-neg F)))
-	((impl-p F) (cnf (expand-impl F)))
-	((bicond-p F) (cnf (expand-bicond F)))
-	((conj-p F) (cnf-cond-conj-disj F 
-					   (t  (list (cnf (phi F)) ^ (cnf (psy F))))))
-	((disj-p F) (cnf-cond-conj-disj F
-					   ((or (conj-p (phi F)) (conj-p (psy F)))
-					    (cnf (distr-disj F)))
-					   ((literal-disj-p F) F)
-					   (t  (cnf (list (cnf (phi F)) v (cnf (psy F)))))))
-	(t (error "Incorrect input"))))
+  ;; Cover conditions common to converting conjunctions or disjunctions
+  ;; to CNF in addition to those specified in conds.
+  (macrolet ((cnf-cond-conj-disj (F &rest conds)
+	       `(cond ((literal-parts-p ,F) ,F)
+		      ((or (bicond-p (phi ,F)) (bicond-p (psy ,F))) 
+		       (cnf (expand-sub-bicond ,F)))
+		      ((or (impl-p (phi ,F)) (impl-p (psy ,F)))
+		       (cnf (expand-sub-impl ,F)))
+		      ,@conds)))
+    
+    (cond ((literal-p F) F)
+	  ((neg-p F) (cnf (bring-in-neg F)))
+	  ((impl-p F) (cnf (expand-impl F)))
+	  ((bicond-p F) (cnf (expand-bicond F)))
+	  ((conj-p F) (cnf-cond-conj-disj F 
+					  (t  (list (cnf (phi F)) ^ (cnf (psy F))))))
+	  ((disj-p F) (cnf-cond-conj-disj F
+					  ((or (conj-p (phi F)) (conj-p (psy F)))
+					   (cnf (distr-disj F)))
+					  ((literal-disj-p F) F)
+					  (t  (cnf (list (cnf (phi F)) v (cnf (psy F)))))))
+	  (t (error "Incorrect input")))))
 
 ;;;; 5: CLAUSE CREATION ===============================================================================
 ;;;; This section contains functions that convert forms in cnf into clauses. Clauses are implemented as 
@@ -366,7 +364,7 @@ in clause pairs."
   (let ((retval t))
     (loop for val being the hash-values in *clause-pairs*
        do (if (not val) (setf retval nil)))
-  retval))
+    retval))
 
 ;;;; 7: RESOLUTION ==========================================================================================
 ;;;; This section contains code to resolve two clauses. The resolution algorithm takes two clauses,
